@@ -1,0 +1,9 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Pretty URLs for the Integration API on Apache:
+    #   /api/integration/v1/courses/CODE  ->  /api/integration/v1/index.php?_path=/courses/CODE
+    # The ?_path= form always works, with or without mod_rewrite.
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^v1/(.*)$ v1/index.php?_path=/$1 [QSA,L]
+</IfModule>
