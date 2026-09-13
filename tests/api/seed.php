@@ -178,7 +178,19 @@ $db->query("INSERT INTO api_token
         department_id = ?d, ip = '', enabled = 1, created = NOW(), updated = NOW(),
         expired = DATE_ADD(NOW(), INTERVAL 1 YEAR), user_id = ?d, scopes = ?s",
     $token, hash('sha256', $token), substr($token, 0, 16), 'integration-api-smoke-test',
-    'Created by tests/api/seed.php', $departmentId, $teacherId, 'courses.read documents.write');
+    'Created by tests/api/seed.php', $departmentId, $teacherId,
+    'courses.read units.write announcements.write documents.write');
+
+// Token bound to the teacher with publish scopes (regenerated every run)
+$publishToken = 'eclass_' . bin2hex(random_bytes(32));
+$db->query("DELETE FROM api_token WHERE name = 'integration-api-publish-test'");
+$db->query("INSERT INTO api_token
+    SET token = ?s, token_hash = ?s, token_prefix = ?s, name = ?s, comments = ?s,
+        department_id = ?d, ip = '', enabled = 1, created = NOW(), updated = NOW(),
+        expired = DATE_ADD(NOW(), INTERVAL 1 YEAR), user_id = ?d, scopes = ?s",
+    $publishToken, hash('sha256', $publishToken), substr($publishToken, 0, 16), 'integration-api-publish-test',
+    'Created by tests/api/seed.php', $departmentId, $teacherId,
+    'courses.read units.publish announcements.publish documents.publish');
 
 // Token bound to a platform administrator: must never gain admin capability
 $admin = $db->querySingle('SELECT user_id FROM admin ORDER BY user_id LIMIT 1');
@@ -194,4 +206,5 @@ if ($admin) {
         'Created by tests/api/seed.php', $departmentId, $admin->user_id, 'courses.read');
 }
 
-echo "\nAPI_TOKEN=$token\nAPI_ADMIN_TOKEN=$adminToken\nAPI_COURSE=APITEST1\nAPI_OTHER_COURSE=APITEST2\n";
+echo "\nAPI_TOKEN=$token\nAPI_PUBLISH_TOKEN=$publishToken\nAPI_ADMIN_TOKEN=$adminToken\n"
+    . "API_COURSE=APITEST1\nAPI_OTHER_COURSE=APITEST2\n";

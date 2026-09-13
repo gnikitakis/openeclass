@@ -37,6 +37,26 @@ class ApiRouter {
         ['GET', '/capabilities', 'any', 'ApiCapabilitiesController', 'get'],
         ['GET', '/courses', 'courses.read', 'ApiCourseController', 'index'],
         ['GET', '/courses/{code}', 'courses.read', 'ApiCourseController', 'show'],
+
+        // Units. PATCH needs units.publish as well when the target is visible.
+        ['GET', '/courses/{code}/units', 'units.read', 'ApiUnitController', 'index'],
+        ['POST', '/courses/{code}/units', 'units.write', 'ApiUnitController', 'store'],
+        ['POST', '/courses/{code}/units/reorder', 'units.publish', 'ApiUnitController', 'reorder'],
+        ['GET', '/courses/{code}/units/{id}', 'units.read', 'ApiUnitController', 'show'],
+        ['PATCH', '/courses/{code}/units/{id}', 'units.write', 'ApiUnitController', 'update'],
+        ['POST', '/courses/{code}/units/{id}/visibility', 'units.publish', 'ApiUnitController', 'visibility'],
+        ['GET', '/courses/{code}/units/{id}/resources', 'units.read', 'ApiUnitController', 'resources'],
+        ['POST', '/courses/{code}/units/{id}/resources', 'units.write', 'ApiUnitController', 'addResource'],
+        ['POST', '/courses/{code}/units/{id}/resources/reorder', 'units.publish', 'ApiUnitController', 'reorderResources'],
+        ['PATCH', '/courses/{code}/units/{id}/resources/{rid}', 'units.write', 'ApiUnitController', 'updateResource'],
+        ['POST', '/courses/{code}/units/{id}/resources/{rid}/visibility', 'units.publish', 'ApiUnitController', 'resourceVisibility'],
+
+        // Announcements. PATCH needs announcements.publish as well when the target is visible.
+        ['GET', '/courses/{code}/announcements', 'announcements.read', 'ApiAnnouncementController', 'index'],
+        ['POST', '/courses/{code}/announcements', 'announcements.write', 'ApiAnnouncementController', 'store'],
+        ['GET', '/courses/{code}/announcements/{id}', 'announcements.read', 'ApiAnnouncementController', 'show'],
+        ['PATCH', '/courses/{code}/announcements/{id}', 'announcements.write', 'ApiAnnouncementController', 'update'],
+        ['POST', '/courses/{code}/announcements/{id}/visibility', 'announcements.publish', 'ApiAnnouncementController', 'visibility'],
     ];
 
     /**
@@ -48,7 +68,9 @@ class ApiRouter {
     public static function match(ApiRequest $request) {
         $pathMatched = false;
         foreach (self::ROUTES as [$method, $pattern, $scope, $controller, $action]) {
-            $regex = '#^' . preg_replace('/\{(\w+)\}/', '(?P<$1>[^/]+)', $pattern) . '$#';
+            // {code} is a course code; every other placeholder is a numeric id,
+            // so literal segments such as "reorder" never match an id slot
+            $regex = '#^' . preg_replace(['/\{code\}/', '/\{(\w+)\}/'], ['(?P<code>[^/]+)', '(?P<$1>\d+)'], $pattern) . '$#';
             if (!preg_match($regex, $request->path, $m)) {
                 continue;
             }

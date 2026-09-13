@@ -119,7 +119,12 @@ class ApiResponse {
     private static function emit(array $body, $httpStatus, $exit = true) {
         self::$sent = true;
         if (!headers_sent()) {
-            http_response_code($httpStatus);
+            // A status line set with header("HTTP/1.1 303 ...") (as
+            // redirect_to_home_page() does) takes precedence over
+            // http_response_code() under PHP-FPM, so the status is set the
+            // same way to replace it.
+            $protocol = $_SERVER['SERVER_PROTOCOL'] ?? 'HTTP/1.1';
+            header("$protocol $httpStatus " . self::reasonPhrase($httpStatus), true, $httpStatus);
             header('Content-Type: application/json; charset=utf-8');
             header('X-Content-Type-Options: nosniff');
             header('Cache-Control: no-store');
@@ -129,5 +134,20 @@ class ApiResponse {
         if ($exit) {
             exit;
         }
+    }
+
+    /**
+     * @param int $status
+     * @return string Standard reason phrase for the statuses the API uses
+     */
+    private static function reasonPhrase($status) {
+        $phrases = [
+            200 => 'OK', 201 => 'Created', 204 => 'No Content',
+            400 => 'Bad Request', 401 => 'Unauthorized', 403 => 'Forbidden', 404 => 'Not Found',
+            405 => 'Method Not Allowed', 409 => 'Conflict', 413 => 'Content Too Large',
+            415 => 'Unsupported Media Type', 422 => 'Unprocessable Content', 429 => 'Too Many Requests',
+            500 => 'Internal Server Error', 502 => 'Bad Gateway', 503 => 'Service Unavailable',
+        ];
+        return $phrases[$status] ?? 'Unknown';
     }
 }

@@ -25,16 +25,22 @@
  *
  * Environment:
  *   API_BASE_URL   e.g. http://localhost/api/integration/v1/index.php
- *   API_TOKEN      a token bound to a teacher (scopes: courses.read)
+ *   API_TOKEN      a token bound to a teacher (scopes: courses.read units.write announcements.write)
+ *   API_PUBLISH_TOKEN (optional) a token bound to the same teacher with units.publish announcements.publish
+ *   API_ADMIN_TOKEN   (optional) a token bound to a platform administrator
  *   API_COURSE     a course code the token user teaches
  *   API_OTHER_COURSE  (optional) a course code the user does not teach
  *   API_HOST_HEADER   (optional) Host header to send, e.g. "localhost"
+ *
+ * Writes are made in API_COURSE (units, resources, announcements) and are
+ * left hidden; run this against a test installation only.
  *
  * Exit code 0 = all assertions passed, 1 = at least one failure.
  */
 
 $base = rtrim(getenv('API_BASE_URL') ?: 'http://localhost/api/integration/v1/index.php', '/');
 $token = getenv('API_TOKEN') ?: '';
+$publishToken = getenv('API_PUBLISH_TOKEN') ?: '';
 $course = getenv('API_COURSE') ?: '';
 $otherCourse = getenv('API_OTHER_COURSE') ?: '';
 $hostHeader = getenv('API_HOST_HEADER') ?: '';
@@ -54,7 +60,7 @@ function tassert(bool $cond, string $name, ?string $detail = null): void {
 /**
  * @return array{status: int, headers: array<string,string>, body: array|null, raw: string}
  */
-function call(string $method, string $path, ?string $token, array $extraHeaders = []): array {
+function call(string $method, string $path, ?string $token, array $extraHeaders = [], ?array $body = null): array {
     global $base, $hostHeader;
     $url = $base . '?_path=' . rawurlencode($path);
     $headers = ['Accept: application/json'];
@@ -67,15 +73,20 @@ function call(string $method, string $path, ?string $token, array $extraHeaders 
     foreach ($extraHeaders as $h) {
         $headers[] = $h;
     }
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
+    $options = [
         CURLOPT_CUSTOMREQUEST => $method,
-        CURLOPT_HTTPHEADER => $headers,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HEADER => true,
         CURLOPT_FOLLOWLOCATION => false,
         CURLOPT_TIMEOUT => 30,
-    ]);
+    ];
+    if ($body !== null) {
+        $headers[] = 'Content-Type: application/json';
+        $options[CURLOPT_POSTFIELDS] = json_encode($body);
+    }
+    $options[CURLOPT_HTTPHEADER] = $headers;
+    $ch = curl_init($url);
+    curl_setopt_array($ch, $options);
     $raw = curl_exec($ch);
     $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
@@ -177,6 +188,115 @@ if ($adminToken !== '') {
         tassert($r['status'] === 403 and ($r['body']['error']['code'] ?? '') === 'not_editor',
             'admin-bound token: course without membership is 403 not_editor (no admin shortcut)', $r['raw']);
     }
+}
+
+// 11. units: draft-first, write versus publish, dry run
+if ($course !== '') {
+    $u = "/courses/$course/units";
+    $r = call('POST', $u, $token, [], []);
+    tassert($r['status'] === 422 and ($r['body']['error']['code'] ?? '') === 'validation_failed'
+        and ($r['body']['error']['field_errors'][0]['field'] ?? '') === 'title',
+        'unit without title is 422 with field error', $r['raw']);
+    $before = count(call('GET', $u, $token)['body']['data'] ?? []);
+    $r = call('POST', $u, $token, ['X-Dry-Run: true'], ['title' => 'Dry run unit']);
+    tassert($r['status'] === 200 and ($r['body']['meta']['dry_run'] ?? false) === true
+        and ($r['body']['data']['id'] ?? 0) > 0, 'dry run create answers with the would-be unit', $r['raw']);
+    $after = count(call('GET', $u, $token)['body']['data'] ?? []);
+    tassert($after === $before, 'dry run left the unit count unchanged', "$before -> $after");
+    $r = call('POST', $u, $token, [], ['title' => 'Integration API unit', 'description' => '<p>Draft</p><script>alert(1)</script>',
+        'start_date' => '2026-10-01']);
+    tassert($r['status'] === 201 and ($r['body']['data']['visible'] ?? true) === false, 'created unit is hidden', $r['raw']);
+    tassert(!str_contains($r['body']['data']['description'] ?? '', '<script'), 'unit description is purified', $r['raw']);
+    tassert(($r['body']['data']['start_date'] ?? '') === '2026-10-01', 'unit start_date stored', $r['raw']);
+    tassert(($r['body']['meta']['changes'][0]['table'] ?? '') === 'course_units', 'meta.changes lists the insert', $r['raw']);
+    $unitId = $r['body']['data']['id'] ?? 0;
+    $r = call('GET', $u, $token);
+    tassert(in_array($unitId, array_column($r['body']['data'] ?? [], 'id'), true), 'new unit is listed');
+    $r = call('GET', "$u/$unitId", $token);
+    tassert($r['status'] === 200 and ($r['body']['data']['resources'] ?? null) === [], 'unit detail has empty resources', $r['raw']);
+    $r = call('PATCH', "$u/$unitId", $token, [], ['title' => 'Integration API unit, edited']);
+    tassert($r['status'] === 200 and ($r['body']['data']['title'] ?? '') === 'Integration API unit, edited',
+        'hidden unit can be edited with units.write', $r['raw']);
+    $r = call('PATCH', "$u/$unitId", $token, [], ['bogus' => 1]);
+    tassert($r['status'] === 422, 'unknown field is 422', $r['raw']);
+    $r = call('POST', "$u/$unitId/visibility", $token, [], ['visible' => true]);
+    tassert($r['status'] === 403 and ($r['body']['error']['code'] ?? '') === 'scope_missing',
+        'units.write cannot make a unit visible', $r['raw']);
+    $r = call('GET', "$u/reorder", $token);
+    tassert($r['status'] === 405, 'GET units/reorder is 405 (literal segment is not an id)', $r['raw']);
+    $r = call('GET', "$u/999999999", $token);
+    tassert($r['status'] === 404, 'unknown unit is 404', $r['raw']);
+
+    // resources
+    $r = call('POST', "$u/$unitId/resources", $token, [], ['type' => 'text', 'html' => '<p>Hello</p><script>x()</script>']);
+    tassert($r['status'] === 201 and ($r['body']['data']['type'] ?? '') === 'text'
+        and ($r['body']['data']['visible'] ?? true) === false, 'text resource created hidden', $r['raw']);
+    tassert(!str_contains($r['body']['data']['comments'] ?? '', '<script'), 'text resource html is purified', $r['raw']);
+    $textId = $r['body']['data']['id'] ?? 0;
+    $r = call('POST', "$u/$unitId/resources", $token, [], ['type' => 'divider', 'title' => 'Part 2']);
+    tassert($r['status'] === 201 and ($r['body']['data']['type'] ?? '') === 'divider', 'divider resource created', $r['raw']);
+    $dividerId = $r['body']['data']['id'] ?? 0;
+    $r = call('POST', "$u/$unitId/resources", $token, [], ['type' => 'document', 'document_id' => 999999999]);
+    tassert($r['status'] === 404, 'document resource with unknown document is 404', $r['raw']);
+    $r = call('POST', "$u/$unitId/resources", $token, [], ['type' => 'bogus']);
+    tassert($r['status'] === 422, 'unknown resource type is 422', $r['raw']);
+    $r = call('GET', "$u/$unitId/resources", $token);
+    tassert(array_column($r['body']['data'] ?? [], 'id') === [$textId, $dividerId], 'resources listed in order', $r['raw']);
+    $r = call('PATCH', "$u/$unitId/resources/$textId", $token, [], ['title' => 'Intro']);
+    tassert($r['status'] === 200 and ($r['body']['data']['title'] ?? '') === 'Intro', 'hidden resource edited with units.write', $r['raw']);
+    $r = call('POST', "$u/$unitId/resources/reorder", $token, [], ['ids' => [$dividerId, $textId]]);
+    tassert($r['status'] === 403, 'reorder needs units.publish', $r['raw']);
+
+    if ($publishToken !== '') {
+        $r = call('POST', "$u/$unitId/resources/reorder", $publishToken, [], ['ids' => [$dividerId]]);
+        tassert($r['status'] === 422, 'reorder with an incomplete id list is 422', $r['raw']);
+        $r = call('POST', "$u/$unitId/resources/reorder", $publishToken, [], ['ids' => [$dividerId, $textId]]);
+        tassert($r['status'] === 200 and array_column($r['body']['data'] ?? [], 'id') === [$dividerId, $textId],
+            'resources reordered with units.publish', $r['raw']);
+        $r = call('POST', "$u/$unitId/visibility", $publishToken, [], ['visible' => true]);
+        tassert($r['status'] === 200 and ($r['body']['data']['visible'] ?? false) === true, 'unit made visible with units.publish', $r['raw']);
+        $r = call('PATCH', "$u/$unitId", $token, [], ['title' => 'Should fail']);
+        tassert($r['status'] === 403 and ($r['body']['error']['code'] ?? '') === 'scope_missing',
+            'visible unit cannot be edited with units.write only', $r['raw']);
+        $r = call('PATCH', "$u/$unitId", $publishToken, [], ['title' => 'Integration API unit, published']);
+        tassert($r['status'] === 200, 'visible unit edited with units.publish', $r['raw']);
+        $r = call('POST', "$u/$unitId/visibility", $publishToken, [], ['visible' => false]);
+        tassert($r['status'] === 200 and ($r['body']['data']['visible'] ?? true) === false, 'unit hidden again', $r['raw']);
+    }
+}
+
+// 12. announcements: draft-first, never email
+if ($course !== '') {
+    $a = "/courses/$course/announcements";
+    $r = call('POST', $a, $token, [], ['title' => '', 'content' => 'x']);
+    tassert($r['status'] === 422, 'announcement without title is 422', $r['raw']);
+    $r = call('POST', $a, $token, [], ['title' => 'Hello', 'content' => '<p>Body</p>', 'start_display' => '2026-10-01 09:00',
+        'stop_display' => 'not a date']);
+    tassert($r['status'] === 422 and ($r['body']['error']['field_errors'][0]['field'] ?? '') === 'stop_display',
+        'bad stop_display is a field error', $r['raw']);
+    $r = call('POST', $a, $token, [], ['title' => 'Integration API announcement', 'content' => '<p>Body</p><script>x()</script>',
+        'start_display' => '2026-10-01T09:00']);
+    tassert($r['status'] === 201 and ($r['body']['data']['visible'] ?? true) === false, 'created announcement is hidden', $r['raw']);
+    tassert(($r['body']['data']['start_display'] ?? '') === '2026-10-01 09:00:00', 'start_display normalised', $r['raw']);
+    tassert(!str_contains($r['body']['data']['content'] ?? '', '<script'), 'announcement content is purified', $r['raw']);
+    $annId = $r['body']['data']['id'] ?? 0;
+    $r = call('GET', $a, $token);
+    tassert(in_array($annId, array_column($r['body']['data'] ?? [], 'id'), true), 'new announcement is listed');
+    $r = call('PATCH', "$a/$annId", $token, [], ['content' => '<p>Edited</p>']);
+    tassert($r['status'] === 200 and ($r['body']['data']['content'] ?? '') === '<p>Edited</p>', 'hidden announcement edited', $r['raw']);
+    $r = call('POST', "$a/$annId/visibility", $token, [], ['visible' => true]);
+    tassert($r['status'] === 403 and ($r['body']['error']['code'] ?? '') === 'scope_missing',
+        'announcements.write cannot publish', $r['raw']);
+    if ($publishToken !== '') {
+        $r = call('POST', "$a/$annId/visibility", $publishToken, [], ['visible' => true]);
+        tassert($r['status'] === 200 and ($r['body']['data']['visible'] ?? false) === true, 'announcement published with announcements.publish', $r['raw']);
+        $r = call('PATCH', "$a/$annId", $token, [], ['title' => 'Should fail']);
+        tassert($r['status'] === 403, 'visible announcement cannot be edited with announcements.write only', $r['raw']);
+        $r = call('POST', "$a/$annId/visibility", $publishToken, [], ['visible' => false]);
+        tassert($r['status'] === 200 and ($r['body']['data']['visible'] ?? true) === false, 'announcement hidden again', $r['raw']);
+    }
+    $r = call('GET', "$a/999999999", $token);
+    tassert($r['status'] === 404, 'unknown announcement is 404', $r['raw']);
 }
 
 echo "\n" . ($failures ? "$failures assertion(s) FAILED" : 'All assertions passed') . "\n";

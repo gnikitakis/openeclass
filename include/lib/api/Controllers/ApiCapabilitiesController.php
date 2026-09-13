@@ -50,9 +50,10 @@ class ApiCapabilitiesController {
                 'post_max_bytes' => self::iniBytes(ini_get('post_max_size')),
             ],
             'features' => [
-                'dry_run' => false,
+                'dry_run' => true,
                 'idempotency' => false,
-                'publish' => false,
+                'publish' => true,
+                'draft_first' => true,
             ],
             'error_codes' => ApiErrorCodes::all(),
             'spec_url' => $urlServer . 'api/integration/v1/index.php?_path=/openapi.yaml',
