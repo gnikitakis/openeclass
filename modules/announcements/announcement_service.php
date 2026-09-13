@@ -70,6 +70,7 @@ function announcement_save($courseId, array $data, $id = null, $index = true) {
         $id = $db->query('INSERT INTO announcement SET content = ?s, title = ?s, `date` = ?t,
                 course_id = ?d, `order` = 0, start_display = ?t, stop_display = ?t, visible = ?d',
             $content, $title, $date, $courseId, $start, $stop, $visible ? 1 : 0)->lastInsertID;
+        $id = intval($id);
         $logType = LOG_INSERT;
     }
     if ($index) {

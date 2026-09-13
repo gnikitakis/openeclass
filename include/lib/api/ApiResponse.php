@@ -82,6 +82,31 @@ class ApiResponse {
     }
 
     /**
+     * Emit a stored file as the response body and end the request. Used by
+     * the one endpoint that returns bytes instead of JSON, so that an agent
+     * can read material that is already in the course.
+     *
+     * @param string $path     Readable path of the file
+     * @param string $filename Name to offer the client
+     */
+    public static function sendFile($path, $filename) {
+        self::$sent = true;
+        if (!headers_sent()) {
+            $protocol = $_SERVER['SERVER_PROTOCOL'] ?? 'HTTP/1.1';
+            header("$protocol 200 OK", true, 200);
+            header('Content-Type: application/octet-stream');
+            header('Content-Length: ' . filesize($path));
+            header('Content-Disposition: attachment; filename="' . str_replace('"', '', $filename)
+                . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
+            header('X-Content-Type-Options: nosniff');
+            header('Cache-Control: no-store');
+            header('X-Request-Id: ' . self::requestId());
+        }
+        readfile($path);
+        exit;
+    }
+
+    /**
      * Shutdown guard: if the platform bootstrap ended the request with a
      * redirect (redirect_to_home_page() calls exit), replace the redirect
      * with a JSON error so an API client never receives a bare 303.

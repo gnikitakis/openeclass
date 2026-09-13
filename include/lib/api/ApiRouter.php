@@ -51,6 +51,16 @@ class ApiRouter {
         ['PATCH', '/courses/{code}/units/{id}/resources/{rid}', 'units.write', 'ApiUnitController', 'updateResource'],
         ['POST', '/courses/{code}/units/{id}/resources/{rid}/visibility', 'units.publish', 'ApiUnitController', 'resourceVisibility'],
 
+        // Documents. PATCH and PUT need documents.publish as well when the target is visible.
+        ['GET', '/courses/{code}/documents', 'documents.read', 'ApiDocumentController', 'index'],
+        ['POST', '/courses/{code}/documents', 'documents.write', 'ApiDocumentController', 'store'],
+        ['POST', '/courses/{code}/documents/folders', 'documents.write', 'ApiDocumentController', 'createFolder'],
+        ['GET', '/courses/{code}/documents/{id}', 'documents.read', 'ApiDocumentController', 'show'],
+        ['PATCH', '/courses/{code}/documents/{id}', 'documents.write', 'ApiDocumentController', 'update'],
+        ['GET', '/courses/{code}/documents/{id}/content', 'documents.read', 'ApiDocumentController', 'content'],
+        ['PUT', '/courses/{code}/documents/{id}/content', 'documents.write', 'ApiDocumentController', 'replaceContent'],
+        ['POST', '/courses/{code}/documents/{id}/visibility', 'documents.publish', 'ApiDocumentController', 'visibility'],
+
         // Announcements. PATCH needs announcements.publish as well when the target is visible.
         ['GET', '/courses/{code}/announcements', 'announcements.read', 'ApiAnnouncementController', 'index'],
         ['POST', '/courses/{code}/announcements', 'announcements.write', 'ApiAnnouncementController', 'store'],

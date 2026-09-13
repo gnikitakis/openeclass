@@ -26,9 +26,14 @@
  *
  * It applies the Integration API schema, enables the API, and creates (if
  * missing) a teacher "apiteacher", a course APITEST1 the teacher edits, a
- * course APITEST2 the teacher is not a member of, and a token bound to the
- * teacher. The token is printed once. Idempotent apart from the token,
- * which is regenerated on every run.
+ * course APITEST2 the teacher is not a member of, and three tokens bound to
+ * users: one with write scopes, one with publish scopes, and one bound to a
+ * platform administrator. The tokens are printed once and are regenerated on
+ * every run.
+ *
+ * The units, announcements and documents of the two test courses are removed
+ * on every run, so run.php always starts from a known state and can assert on
+ * exact listings. No other course is touched.
  */
 
 if (php_sapi_name() !== 'cli') {
@@ -167,8 +172,49 @@ function seed_course_extras($courseId, $code, $teacherMemberId) {
     }
 }
 
-seed_course('APITEST1', 'Integration API test course', $teacherId);
-seed_course('APITEST2', 'Integration API course without membership', null);
+$courseIds = [
+    seed_course('APITEST1', 'Integration API test course', $teacherId),
+    seed_course('APITEST2', 'Integration API course without membership', null),
+];
+
+// Start every run from a known state: the smoke tests assert on exact
+// listings, and the API has no delete endpoints to undo a previous run.
+// Only the two seeded test courses are touched.
+foreach ($courseIds as $index => $courseId) {
+    $code = $index === 0 ? 'APITEST1' : 'APITEST2';
+    reset_course_content($courseId, $code);
+}
+
+/**
+ * Remove the units, announcements and main-area documents of a seeded test
+ * course, together with the files those documents point at.
+ * @param int    $courseId
+ * @param string $code
+ */
+function reset_course_content($courseId, $code) {
+    global $db, $webDir;
+    $db->query('DELETE FROM unit_resources WHERE unit_id IN
+        (SELECT id FROM course_units WHERE course_id = ?d)', $courseId);
+    $db->query('DELETE FROM course_units WHERE course_id = ?d', $courseId);
+    $db->query('DELETE FROM announcement WHERE course_id = ?d', $courseId);
+    $documents = $db->queryArray('SELECT path, format FROM document
+        WHERE course_id = ?d AND subsystem = ?d', $courseId, MAIN);
+    $basedir = "$webDir/courses/$code/document";
+    foreach ($documents as $document) {
+        $path = $basedir . $document->path;
+        if ($document->format !== '.dir' and is_file($path)) {
+            unlink($path);
+        }
+    }
+    foreach (array_reverse($documents) as $document) {
+        $path = $basedir . $document->path;
+        if ($document->format === '.dir' and is_dir($path)) {
+            @rmdir($path);
+        }
+    }
+    $db->query('DELETE FROM document WHERE course_id = ?d AND subsystem = ?d', $courseId, MAIN);
+    echo "  content of $code reset\n";
+}
 
 // Token bound to the teacher (regenerated every run)
 $token = 'eclass_' . bin2hex(random_bytes(32));

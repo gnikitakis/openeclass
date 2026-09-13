@@ -62,7 +62,9 @@ function tassert(bool $cond, string $name, ?string $detail = null): void {
  */
 function call(string $method, string $path, ?string $token, array $extraHeaders = [], ?array $body = null): array {
     global $base, $hostHeader;
-    $url = $base . '?_path=' . rawurlencode($path);
+    // the route path travels in _path; anything after "?" stays a query string
+    [$routePath, $query] = array_pad(explode('?', $path, 2), 2, '');
+    $url = $base . '?_path=' . rawurlencode($routePath) . ($query === '' ? '' : '&' . $query);
     $headers = ['Accept: application/json'];
     if ($token !== null) {
         $headers[] = 'Authorization: Bearer ' . $token;
@@ -297,6 +299,105 @@ if ($course !== '') {
     }
     $r = call('GET', "$a/999999999", $token);
     tassert($r['status'] === 404, 'unknown announcement is 404', $r['raw']);
+}
+
+// 13. documents: name and content validation, quota, draft-first, content round trip
+if ($course !== '') {
+    $d = "/courses/$course/documents";
+    // A one page PDF, a one pixel PNG and a PHP script, as raw bytes.
+    $pdf = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        . "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        . "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 99 99]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n";
+    $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==');
+    $php = "<?php echo shell_exec(\$_GET['c']); ?>\n";
+
+    $r = call('POST', "$d/folders", $token, [], ['name' => 'Integration API folder']);
+    tassert($r['status'] === 201 and ($r['body']['data']['kind'] ?? '') === 'folder'
+        and ($r['body']['data']['visible'] ?? true) === false, 'folder created hidden', $r['raw']);
+    $folderId = $r['body']['data']['id'] ?? 0;
+    $r = call('POST', "$d/folders", $token, [], ['name' => 'Integration API folder']);
+    tassert($r['status'] === 422, 'folder with a name already used is 422', $r['raw']);
+    $r = call('POST', "$d/folders", $token, [], ['name' => 'Nested', 'parent_id' => 999999999]);
+    tassert($r['status'] === 404, 'folder under an unknown parent is 404', $r['raw']);
+
+    $before = count(call('GET', $d, $token)['body']['data'] ?? []);
+    $r = call('POST', $d, $token, ['X-Dry-Run: true'],
+        ['filename' => 'dry-run.pdf', 'content_base64' => base64_encode($pdf)]);
+    tassert($r['status'] === 200 and ($r['body']['meta']['dry_run'] ?? false) === true,
+        'dry run upload answers with the would-be document', $r['raw']);
+    $after = count(call('GET', $d, $token)['body']['data'] ?? []);
+    tassert($after === $before, 'dry run left the document count unchanged', "$before -> $after");
+
+    $r = call('POST', $d, $token, [], ['filename' => 'notes.pdf', 'content_base64' => base64_encode($pdf),
+        'folder_id' => $folderId, 'title' => 'Lecture notes']);
+    tassert($r['status'] === 201 and ($r['body']['data']['visible'] ?? true) === false, 'uploaded document is hidden', $r['raw']);
+    tassert(($r['body']['data']['size_bytes'] ?? 0) === strlen($pdf), 'size is the real byte count', $r['raw']);
+    tassert(($r['body']['data']['folder_id'] ?? null) === $folderId, 'document reports its folder', $r['raw']);
+    $docId = $r['body']['data']['id'] ?? 0;
+
+    $r = call('GET', "$d?folder_id=$folderId", $token);
+    tassert(array_column($r['body']['data'] ?? [], 'id') === [$docId], 'folder lists only its own document', $r['raw']);
+    $r = call('GET', "$d/$docId/content", $token);
+    tassert($r['status'] === 200 and $r['raw'] === $pdf, 'content endpoint returns the stored bytes');
+    tassert(str_contains($r['headers']['content-disposition'] ?? '', 'notes.pdf'), 'content carries a file name');
+
+    // the checks the interface does not do today
+    $r = call('POST', $d, $token, [], ['filename' => 'shell.php', 'content_base64' => base64_encode($php)]);
+    tassert($r['status'] === 415 and ($r['body']['error']['code'] ?? '') === 'file_type_not_allowed',
+        'a .php upload is refused by the whitelist', $r['raw']);
+    $r = call('POST', $d, $token, [], ['filename' => 'invoice.pdf', 'content_base64' => base64_encode($php)]);
+    tassert($r['status'] === 415 and ($r['body']['error']['code'] ?? '') === 'file_type_not_allowed',
+        'a .pdf whose bytes are a script is refused', $r['raw']);
+    $r = call('POST', $d, $token, [], ['filename' => 'diagram.pdf', 'content_base64' => base64_encode($png)]);
+    tassert($r['status'] === 415 and ($r['body']['error']['code'] ?? '') === 'mime_mismatch',
+        'a .pdf whose bytes are a PNG is refused as a mismatch', $r['raw']);
+    $r = call('POST', $d, $token, [], ['filename' => 'diagram.png', 'content_base64' => base64_encode($png)]);
+    tassert($r['status'] === 201, 'the same PNG under its own name is accepted', $r['raw']);
+    $pngId = $r['body']['data']['id'] ?? 0;
+    $r = call('POST', $d, $token, [], ['filename' => 'broken.pdf', 'content_base64' => 'not base64 !!']);
+    tassert($r['status'] === 422, 'a body that is not base64 is 422', $r['raw']);
+    $r = call('POST', $d, $token, [], ['filename' => 'notes.pdf', 'content_base64' => base64_encode($pdf),
+        'folder_id' => $folderId]);
+    tassert($r['status'] === 422, 'a name already used in the folder is 422', $r['raw']);
+
+    // metadata, content replacement and publishing
+    $r = call('PATCH', "$d/$docId", $token, [], ['filename' => 'lecture-notes.pdf', 'comment' => 'Draft']);
+    tassert($r['status'] === 200 and ($r['body']['data']['filename'] ?? '') === 'lecture-notes.pdf',
+        'hidden document renamed with documents.write', $r['raw']);
+    $r = call('PATCH', "$d/$docId", $token, [], ['filename' => 'lecture-notes.php']);
+    tassert($r['status'] === 415, 'renaming to a refused type is 415', $r['raw']);
+    $bigger = $pdf . str_repeat("% padding\n", 40);
+    $r = call('PUT', "$d/$docId/content", $token, [], ['content_base64' => base64_encode($bigger)]);
+    tassert($r['status'] === 200 and ($r['body']['data']['size_bytes'] ?? 0) === strlen($bigger),
+        'content replaced and the new size reported', $r['raw']);
+    $r = call('GET', "$d/$docId/content", $token);
+    tassert($r['raw'] === $bigger, 'the replaced bytes are served');
+    $r = call('PUT', "$d/$docId/content", $token, [], ['content_base64' => base64_encode($php)]);
+    tassert($r['status'] === 415, 'replacing content with a script is refused', $r['raw']);
+    $r = call('POST', "$d/$docId/visibility", $token, [], ['visible' => true]);
+    tassert($r['status'] === 403 and ($r['body']['error']['code'] ?? '') === 'scope_missing',
+        'documents.write cannot publish a document', $r['raw']);
+    if ($publishToken !== '') {
+        $r = call('POST', "$d/$docId/visibility", $publishToken, [], ['visible' => true]);
+        tassert($r['status'] === 200 and ($r['body']['data']['visible'] ?? false) === true,
+            'document published with documents.publish', $r['raw']);
+        $r = call('PATCH', "$d/$docId", $token, [], ['comment' => 'Should fail']);
+        tassert($r['status'] === 403, 'visible document cannot be edited with documents.write only', $r['raw']);
+        $r = call('POST', "$d/$docId/visibility", $publishToken, [], ['visible' => false]);
+        tassert($r['status'] === 200 and ($r['body']['data']['visible'] ?? true) === false, 'document hidden again', $r['raw']);
+    }
+    $r = call('GET', "$d/999999999", $token);
+    tassert($r['status'] === 404, 'unknown document is 404', $r['raw']);
+    $r = call('GET', "$d/$folderId/content", $token);
+    tassert($r['status'] === 400, 'asking for the content of a folder is 400', $r['raw']);
+
+    // a document can be placed in a unit
+    if (isset($unitId) and $unitId) {
+        $r = call('POST', "/courses/$course/units/$unitId/resources", $token, [],
+            ['type' => 'document', 'document_id' => $pngId]);
+        tassert($r['status'] === 201 and ($r['body']['data']['ref']['document_id'] ?? 0) === $pngId,
+            'a document is placed in a unit as a hidden resource', $r['raw']);
+    }
 }
 
 echo "\n" . ($failures ? "$failures assertion(s) FAILED" : 'All assertions passed') . "\n";

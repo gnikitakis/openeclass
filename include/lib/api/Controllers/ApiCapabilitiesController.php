@@ -17,6 +17,8 @@
  *
  */
 
+require_once 'modules/document/document_service.php';
+
 /**
  * @brief GET /capabilities: what the presenting token can do.
  *
@@ -48,6 +50,8 @@ class ApiCapabilitiesController {
             'limits' => [
                 'upload_max_bytes' => self::iniBytes(ini_get('upload_max_filesize')),
                 'post_max_bytes' => self::iniBytes(ini_get('post_max_size')),
+                'base64_upload_max_bytes' => DOCUMENT_SERVICE_MAX_BASE64_BYTES,
+                'allowed_extensions' => self::allowedExtensions(),
             ],
             'features' => [
                 'dry_run' => true,
@@ -60,6 +64,27 @@ class ApiCapabilitiesController {
             'acting' => $context->actingSummary(),
         ];
         return ['data' => $data];
+    }
+
+    /**
+     * File extensions a teacher of this platform may upload: the student
+     * whitelist plus the teacher whitelist. A whitelist of "*" is reported
+     * as ["*"]; executable formats are refused even then.
+     * @return string[]
+     */
+    private static function allowedExtensions() {
+        $list = [];
+        foreach (['student_upload_whitelist', 'teacher_upload_whitelist'] as $key) {
+            foreach (explode(',', (string) get_config($key)) as $extension) {
+                $extension = trim($extension);
+                if ($extension !== '') {
+                    $list[$extension] = true;
+                }
+            }
+        }
+        $list = array_keys($list);
+        sort($list);
+        return $list;
     }
 
     /**

@@ -59,7 +59,7 @@ function unit_create($courseId, $courseCode, array $data, $index = true) {
             visible = ?d, assign_to_specific = 0, `order` = ?d, course_id = ?d',
         $data['title'], $data['comments'] ?? '', $data['start_week'] ?? null, $data['finish_week'] ?? null,
         $data['visible'] ?? 1, $order, $courseId);
-    $unitId = $q->lastInsertID;
+    $unitId = intval($q->lastInsertID);
     $count = $db->querySingle('SELECT COUNT(*) AS n FROM course_units WHERE course_id = ?d', $courseId);
     if (intval($count->n) == 1) { // first unit: make 'list' the default unit view
         $db->query('UPDATE course SET view_units = 1 WHERE id = ?d', $courseId);
@@ -208,7 +208,7 @@ function unit_resource_add($courseId, $courseCode, $unitId, $type, array $data, 
     $q = $db->query('INSERT INTO unit_resources SET unit_id = ?d, type = ?s, title = ?s, comments = ?s,
             visible = ?d, `order` = ?d, `date` = ' . DBHelper::timeAfter() . ', res_id = ?d',
         $unitId, $type, $title, $comments, $data['visible'] ?? 1, $order, $resId);
-    $resourceId = $q->lastInsertID;
+    $resourceId = intval($q->lastInsertID);
     if ($index) {
         unit_service_index($courseId, $courseCode, null, $resourceId);
     }
