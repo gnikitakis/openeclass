@@ -115,6 +115,16 @@ tassert(!empty($r['headers']['x-request-id']), 'X-Request-Id header present');
 tassert(($r['body']['data']['schema_ok'] ?? false) === true, 'api_token schema is upgraded', $r['raw']);
 tassert(($r['body']['data']['api_enabled'] ?? false) === true, 'API is enabled in platform config', $r['raw']);
 
+// 1b. the description document, served without a token
+$r = call('GET', '/openapi.yaml', null);
+tassert($r['status'] === 200, 'GET /openapi.yaml returns 200', "got {$r['status']}");
+tassert(str_starts_with($r['headers']['content-type'] ?? '', 'application/yaml'), 'the description is served as YAML',
+    $r['headers']['content-type'] ?? '');
+tassert(str_starts_with($r['raw'], 'openapi: 3.1'), 'the description declares its version', substr($r['raw'], 0, 40));
+tassert(str_contains($r['raw'], 'operationId: uploadDocument'), 'the description names its operations');
+$r = call('GET', '/openapiXyaml', null);
+tassert($r['status'] === 404, 'a dot in a route pattern matches only a dot', "got {$r['status']}");
+
 // 2. unknown route
 $r = call('GET', '/nope', null);
 tassert($r['status'] === 404 and ($r['body']['error']['code'] ?? '') === 'not_found', 'unknown route is 404 not_found', $r['raw']);

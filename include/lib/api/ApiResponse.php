@@ -112,6 +112,26 @@ class ApiResponse {
     }
 
     /**
+     * Emit a text document as the response body and end the request. Used
+     * by the operation that serves the description of this API.
+     * @param string $text
+     * @param string $contentType
+     */
+    public static function sendText($text, $contentType) {
+        self::$sent = true;
+        if (!headers_sent()) {
+            $protocol = $_SERVER['SERVER_PROTOCOL'] ?? 'HTTP/1.1';
+            header("$protocol 200 OK", true, 200);
+            header('Content-Type: ' . $contentType);
+            header('Content-Length: ' . strlen($text));
+            header('X-Content-Type-Options: nosniff');
+            header('X-Request-Id: ' . self::requestId());
+        }
+        echo $text;
+        exit;
+    }
+
+    /**
      * Emit a stored file as the response body and end the request. Used by
      * the one endpoint that returns bytes instead of JSON, so that an agent
      * can read material that is already in the course.

@@ -1,0 +1,1512 @@
+openapi: 3.1.0
+
+info:
+  title: Open eClass Integration API
+  version: "1.0.0"
+  summary: Scoped, per-user access for external tools that prepare course material.
+  description: |
+    An API for tools that prepare course material on behalf of one teacher.
+
+    Four rules govern everything here. A client that follows them cannot
+    damage a course.
+
+    1. A token acts as one named user. It never gains administrative
+       capability, and it can only reach courses that user teaches right
+       now. Removing the teacher from a course in the interface revokes
+       the token's access to it immediately.
+    2. Everything created through this API is hidden from students. A
+       teacher reviews it in Open eClass and publishes it there.
+    3. Making something visible, and changing or reordering anything
+       students can already see, requires a separate "publish" permission
+       that "write" does not include. Ask for it only if the teacher asked
+       for it.
+    4. Nothing can be deleted. There are no delete operations and no
+       delete permission.
+
+    Two habits make a client well behaved. Send `X-Dry-Run: true` first to
+    see what a write would do without doing it. Send an `Idempotency-Key`
+    on every write, so that a lost answer can be retried safely without
+    creating the same thing twice.
+
+    Call `/capabilities` at the start of a session. It reports the user,
+    the permissions actually granted, the courses reachable right now, the
+    upload limits and the accepted file extensions, so nothing has to be
+    guessed.
+  license:
+    name: GNU General Public License v2.0
+    url: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+  contact:
+    name: GUnet Asynchronous eLearning Group
+    email: info@openeclass.org
+
+servers:
+  - url: "{platform}/api/integration/v1"
+    description: An Open eClass installation
+    variables:
+      platform:
+        default: https://eclass.example.org
+        description: Base address of the platform, without a trailing slash
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Platform
+    description: Service state and what the presenting token may do.
+  - name: Courses
+    description: The courses this token can act in.
+  - name: Units
+    description: Course units and the resources placed inside them.
+  - name: Documents
+    description: Files and folders of the course document area.
+  - name: Announcements
+    description: Course announcements. This API never sends email.
+
+paths:
+
+  /health:
+    get:
+      tags: [Platform]
+      operationId: getHealth
+      x-required-scope: none
+      summary: Service state, without authentication
+      description: |
+        Whether the platform is serving, which version it runs, whether the
+        API is switched on and whether its database changes have been
+        applied. Answers 503 while the platform is in maintenance or being
+        upgraded. This is the only operation that needs no token.
+      security: []
+      responses:
+        "200":
+          description: The platform is serving.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: The platform is in maintenance or being upgraded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Health" }
+
+  /openapi.yaml:
+    get:
+      tags: [Platform]
+      operationId: getSpec
+      x-required-scope: none
+      summary: This description document
+      description: The document you are reading, as served by the platform itself.
+      security: []
+      responses:
+        "200":
+          description: The description document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /capabilities:
+    get:
+      tags: [Platform]
+      operationId: getCapabilities
+      x-required-scope: any
+      summary: What this token may do
+      description: |
+        Call this first. It reports the user the token acts as, the
+        permissions granted, the courses reachable right now with the
+        permissions that apply in each, the upload limits, the file
+        extensions this installation accepts, and the request budget per
+        minute. Everything a client would otherwise have to guess.
+      responses:
+        "200":
+          description: The token is valid.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Capabilities" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /courses:
+    get:
+      tags: [Courses]
+      operationId: listCourses
+      x-required-scope: courses.read
+      summary: Courses this token can act in
+      description: |
+        The token's course list intersected with the courses the bound user
+        teaches at this moment. A course missing from this list cannot be
+        reached, whatever permissions the token carries.
+      responses:
+        "200":
+          description: The list, which may be empty.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/CourseSummary" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /courses/{code}:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+    get:
+      tags: [Courses]
+      operationId: getCourse
+      x-required-scope: courses.read
+      summary: One course, with how much it currently holds
+      responses:
+        "200":
+          description: The course.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Course" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /courses/{code}/units:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+    get:
+      tags: [Units]
+      operationId: listUnits
+      x-required-scope: units.read
+      summary: Units of the course, in their display order
+      responses:
+        "200":
+          description: The units, hidden ones included.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Unit" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Units]
+      operationId: createUnit
+      x-required-scope: units.write
+      summary: Create a unit, hidden
+      description: |
+        The unit is created hidden and placed after the existing ones. The
+        teacher publishes it in Open eClass, or a token carrying
+        `units.publish` can do so with setUnitVisibility.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnitCreate" }
+      responses:
+        "201":
+          description: The unit was created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Unit" }
+        "200": { $ref: "#/components/responses/DryRunUnit" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /courses/{code}/units/reorder:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+    post:
+      tags: [Units]
+      operationId: reorderUnits
+      x-required-scope: units.publish
+      summary: Put the units in a given order
+      description: |
+        Reordering changes what students see, so it needs `units.publish`.
+        The list must name every unit of the course exactly once.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdList" }
+      responses:
+        "200":
+          description: The units in their new order.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Unit" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/units/{id}:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/UnitId"
+    get:
+      tags: [Units]
+      operationId: getUnit
+      x-required-scope: units.read
+      summary: One unit with its resources
+      responses:
+        "200":
+          description: The unit.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/UnitWithResources" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Units]
+      operationId: updateUnit
+      x-required-scope: units.write
+      summary: Change a unit
+      description: |
+        Only the fields present in the body are changed. Editing a unit
+        students can already see also needs `units.publish`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnitUpdate" }
+      responses:
+        "200":
+          description: The unit as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Unit" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/units/{id}/visibility:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/UnitId"
+    post:
+      tags: [Units]
+      operationId: setUnitVisibility
+      x-required-scope: units.publish
+      summary: Show or hide a unit
+      description: |
+        Publishing. Needs `units.publish`. Do not call this unless the
+        teacher asked for the material to be published.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VisibilityChange" }
+      responses:
+        "200":
+          description: The unit as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Unit" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/units/{id}/resources:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/UnitId"
+    get:
+      tags: [Units]
+      operationId: listUnitResources
+      x-required-scope: units.read
+      summary: What a unit contains, in order
+      responses:
+        "200":
+          description: The resources of the unit.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/UnitResource" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Units]
+      operationId: addUnitResource
+      x-required-scope: units.write
+      summary: Put something into a unit, hidden
+      description: |
+        Places one item in the unit: an uploaded document, a block of text,
+        a divider, an exercise or a link. A referenced document, exercise
+        or link must already belong to this course; upload the file first
+        with uploadDocument and pass the id it returns.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnitResourceCreate" }
+      responses:
+        "201":
+          description: The resource was placed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/UnitResource" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: The unit, or the object it should point at, is not in this course.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/units/{id}/resources/reorder:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/UnitId"
+    post:
+      tags: [Units]
+      operationId: reorderUnitResources
+      x-required-scope: units.publish
+      summary: Put the contents of a unit in a given order
+      description: Needs `units.publish`. The list must name every resource of the unit exactly once.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdList" }
+      responses:
+        "200":
+          description: The resources in their new order.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/UnitResource" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/units/{id}/resources/{rid}:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/UnitId"
+      - $ref: "#/components/parameters/ResourceId"
+    patch:
+      tags: [Units]
+      operationId: updateUnitResource
+      x-required-scope: units.write
+      summary: Change the title or text of a resource
+      description: |
+        Only the fields present in the body are changed. Editing a resource
+        that students can already see also needs `units.publish`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnitResourceUpdate" }
+      responses:
+        "200":
+          description: The resource as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/UnitResource" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/units/{id}/resources/{rid}/visibility:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/UnitId"
+      - $ref: "#/components/parameters/ResourceId"
+    post:
+      tags: [Units]
+      operationId: setUnitResourceVisibility
+      x-required-scope: units.publish
+      summary: Show or hide one item inside a unit
+      description: Publishing. Needs `units.publish`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VisibilityChange" }
+      responses:
+        "200":
+          description: The resource as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/UnitResource" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/documents:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+    get:
+      tags: [Documents]
+      operationId: listDocuments
+      x-required-scope: documents.read
+      summary: Files and folders in one folder
+      description: |
+        Lists what sits directly inside a folder, folders first. Without
+        `folder_id` it lists the top level. Descend by passing the id of a
+        folder from a previous answer.
+      parameters:
+        - name: folder_id
+          in: query
+          required: false
+          description: Folder to list. Omit for the top level.
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: The contents of the folder.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Documents]
+      operationId: uploadDocument
+      x-required-scope: documents.write
+      summary: Upload a file, hidden
+      description: |
+        Two ways to send the file. Prefer multipart, with the bytes in a
+        part named `file`. Where multipart is not possible, send JSON with
+        the bytes base64 encoded in `content_base64`; that route is capped,
+        see `limits.base64_upload_max_bytes` in capabilities.
+
+        The file is checked three ways before it is stored: the extension
+        must be one this installation accepts, the bytes must match the
+        type the extension claims, and the course must have room. A name
+        already used in the target folder is refused rather than
+        overwriting.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The bytes of the file.
+                filename:
+                  type: string
+                  description: Name to store it under. Defaults to the name of the uploaded part.
+                folder_id:
+                  type: integer
+                  description: Folder to place it in. Omit for the top level.
+                title: { type: string, maxLength: 255 }
+                comment: { type: string }
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentUploadJson" }
+      responses:
+        "201":
+          description: The file was stored, hidden.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedFile" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /courses/{code}/documents/folders:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+    post:
+      tags: [Documents]
+      operationId: createFolder
+      x-required-scope: documents.write
+      summary: Create a folder, hidden
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FolderCreate" }
+      responses:
+        "201":
+          description: The folder was created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/documents/{id}:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      tags: [Documents]
+      operationId: getDocument
+      x-required-scope: documents.read
+      summary: Details of one file or folder
+      responses:
+        "200":
+          description: The document.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Documents]
+      operationId: updateDocument
+      x-required-scope: documents.write
+      summary: Rename a document or change its description
+      description: |
+        Only the fields present in the body are changed. A new name must
+        still be an accepted file type. Changing a document students can
+        already see also needs `documents.publish`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentUpdate" }
+      responses:
+        "200":
+          description: The document as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "415": { $ref: "#/components/responses/UnsupportedFile" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/documents/{id}/content:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      tags: [Documents]
+      operationId: downloadDocument
+      x-required-scope: documents.read
+      summary: The bytes of a stored file
+      description: |
+        Returns the file itself, not an envelope. Use it to read material
+        the course already holds. Folders and links to external addresses
+        have no content.
+      responses:
+        "200":
+          description: The bytes of the file.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "400":
+          description: The document is a folder or a link, so it has no stored content.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Documents]
+      operationId: replaceDocumentContent
+      x-required-scope: documents.write
+      summary: Replace the bytes of an existing file
+      description: |
+        Keeps the document and its place in the course, and replaces what
+        it contains. The new bytes face the same checks as an upload.
+        Replacing a file students can already see also needs
+        `documents.publish`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content_base64]
+              properties:
+                content_base64:
+                  type: string
+                  description: The new bytes, base64 encoded.
+      responses:
+        "200":
+          description: The document as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Document" }
+        "400":
+          description: The document is a folder, so it has no content to replace.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedFile" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/documents/{id}/visibility:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/DocumentId"
+    post:
+      tags: [Documents]
+      operationId: setDocumentVisibility
+      x-required-scope: documents.publish
+      summary: Show or hide a file or folder
+      description: |
+        Publishing. Needs `documents.publish`. A hidden document is
+        unreachable by students whatever `public` says.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/VisibilityChange"
+                - type: object
+                  properties:
+                    public:
+                      type: boolean
+                      description: Whether visitors who are not enrolled may read it, once it is visible.
+      responses:
+        "200":
+          description: The document as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Document" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/announcements:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+    get:
+      tags: [Announcements]
+      operationId: listAnnouncements
+      x-required-scope: announcements.read
+      summary: Announcements of the course
+      responses:
+        "200":
+          description: The announcements, hidden ones included.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Announcement" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Announcements]
+      operationId: createAnnouncement
+      x-required-scope: announcements.write
+      summary: Draft an announcement, hidden
+      description: |
+        The announcement is created hidden and no email is sent. Notifying
+        course members by email is only possible in Open eClass, where a
+        person chooses the recipients.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnnouncementCreate" }
+      responses:
+        "201":
+          description: The announcement was drafted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Announcement" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /courses/{code}/announcements/{id}:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/AnnouncementId"
+    get:
+      tags: [Announcements]
+      operationId: getAnnouncement
+      x-required-scope: announcements.read
+      summary: One announcement
+      responses:
+        "200":
+          description: The announcement.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Announcement" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Announcements]
+      operationId: updateAnnouncement
+      x-required-scope: announcements.write
+      summary: Change an announcement
+      description: |
+        Only the fields present in the body are changed. Editing an
+        announcement students can already see also needs
+        `announcements.publish`. No email is sent.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnnouncementUpdate" }
+      responses:
+        "200":
+          description: The announcement as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Announcement" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /courses/{code}/announcements/{id}/visibility:
+    parameters:
+      - $ref: "#/components/parameters/CourseCode"
+      - $ref: "#/components/parameters/AnnouncementId"
+    post:
+      tags: [Announcements]
+      operationId: setAnnouncementVisibility
+      x-required-scope: announcements.publish
+      summary: Show or hide an announcement
+      description: |
+        Publishing. Needs `announcements.publish`. Publishing here never
+        sends email, unlike publishing in Open eClass.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DryRun"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VisibilityChange" }
+      responses:
+        "200":
+          description: The announcement as it now stands.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - properties:
+                      data: { $ref: "#/components/schemas/Announcement" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        A token issued by an administrator of the platform, in the API
+        token screen, bound to one user and carrying a set of permissions.
+
+  parameters:
+    CourseCode:
+      name: code
+      in: path
+      required: true
+      description: The course code, as it appears in Open eClass.
+      schema: { type: string }
+    UnitId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    ResourceId:
+      name: rid
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    DocumentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    AnnouncementId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Send one on every write. If the answer is lost, repeat the request
+        with the same key: the original answer comes back and nothing is
+        created twice. The same key with a different body is refused. Keys
+        last a day and belong to the token that used them.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9._:-]{1,128}$"
+    DryRun:
+      name: X-Dry-Run
+      in: header
+      required: false
+      description: |
+        Send `true` to find out what the request would do without doing it.
+        The answer has the shape of the real one, `meta.dry_run` is true
+        and `meta.changes` lists what would have been written. Nothing is
+        stored and no file is written.
+      schema: { type: string, enum: ["true", "false"] }
+
+  responses:
+    Unauthenticated:
+      description: No token, an unknown token, or a token that is disabled, expired or not bound to a user.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: |
+        The token lacks the permission this operation needs
+        (`scope_missing`), may not act in this course
+        (`course_not_allowed`), or the user it acts as does not teach the
+        course (`not_editor`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    NotFound:
+      description: No such course, unit, document or announcement.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: The Idempotency-Key was used for a different request, or that request is still running.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    ValidationFailed:
+      description: The body is not valid. `error.field_errors` names each field and what is wrong with it.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    TooLarge:
+      description: The file exceeds the course quota or the upload limit of the platform.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    UnsupportedFile:
+      description: |
+        The file type is not accepted here (`file_type_not_allowed`), or
+        the bytes do not match the type the name claims
+        (`mime_mismatch`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    RateLimited:
+      description: |
+        The token spent its requests for this minute. `Retry-After` says
+        how many seconds until the next window.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Unavailable:
+      description: The platform is in maintenance, being upgraded, has the API switched off, or has not applied its database changes.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    DryRunUnit:
+      description: A dry run. Nothing was written.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/SuccessEnvelope"
+              - properties:
+                  data: { $ref: "#/components/schemas/Unit" }
+
+  schemas:
+
+    SuccessEnvelope:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          description: The result. Writes return the whole object as it now stands.
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    ErrorEnvelope:
+      type: object
+      required: [error, meta]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: A stable name for what went wrong. Branch on this, never on the message.
+              enum:
+                - bad_request
+                - unauthenticated
+                - token_expired
+                - token_disabled
+                - token_ip_denied
+                - token_not_user_bound
+                - scope_missing
+                - course_not_allowed
+                - not_editor
+                - not_found
+                - method_not_allowed
+                - type_change_destructive
+                - idempotency_conflict
+                - quota_exceeded
+                - file_type_not_allowed
+                - mime_mismatch
+                - validation_failed
+                - unsupported_question_type
+                - exercise_invalid
+                - rate_limited
+                - internal
+                - platform_redirected
+                - maintenance
+                - api_disabled
+                - schema_migration_required
+            message:
+              type: string
+              description: An explanation in English, for a person reading a log. Never translated.
+            field_errors:
+              type: array
+              description: Present when the body was rejected field by field.
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  code:
+                    type: string
+                    enum: [required, type, too_long, invalid, unknown, exists]
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    Meta:
+      type: object
+      properties:
+        request_id:
+          type: string
+          description: Identifies this request in the platform log. Quote it when reporting a problem.
+        dry_run:
+          type: boolean
+          description: Whether the request was a rehearsal.
+        changes:
+          type: array
+          description: On a write, what was written, or what would have been written in a dry run.
+          items:
+            type: object
+            properties:
+              op: { type: string, enum: [insert, update] }
+              table: { type: string }
+              id: { type: integer }
+
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, maintenance] }
+        eclass_version: { type: string }
+        api_version: { type: string }
+        api_enabled:
+          type: boolean
+          description: Whether an administrator has switched the API on.
+        schema_ok:
+          type: boolean
+          description: Whether the database changes this API needs have been applied.
+
+    Capabilities:
+      type: object
+      properties:
+        api_version: { type: string }
+        eclass_version: { type: string }
+        user:
+          type: object
+          description: The user this token acts as.
+          properties:
+            id: { type: integer }
+            username: { type: string }
+            display_name: { type: string }
+        scopes:
+          type: array
+          description: The permissions actually granted, after expansion.
+          items: { type: string }
+        known_scopes:
+          type: array
+          description: Every permission this platform understands.
+          items: { type: string }
+        courses:
+          type: array
+          items: { $ref: "#/components/schemas/CourseSummary" }
+        limits:
+          type: object
+          properties:
+            upload_max_bytes: { type: integer }
+            post_max_bytes: { type: integer }
+            base64_upload_max_bytes:
+              type: integer
+              description: Largest file accepted through the JSON upload route.
+            allowed_extensions:
+              type: array
+              description: File extensions this installation accepts. "*" means any, except executables.
+              items: { type: string }
+            rate_limit_per_minute:
+              type: object
+              properties:
+                read: { type: integer }
+                write: { type: integer }
+            idempotency_key_ttl_seconds: { type: integer }
+        features:
+          type: object
+          properties:
+            dry_run: { type: boolean }
+            idempotency: { type: boolean }
+            publish: { type: boolean }
+            draft_first:
+              type: boolean
+              description: Always true. Everything created here is hidden until a person publishes it.
+        error_codes:
+          type: object
+          description: Every error code this platform can return, with its HTTP status.
+          additionalProperties: { type: integer }
+        spec_url: { type: string }
+        acting: { $ref: "#/components/schemas/Acting" }
+
+    Acting:
+      type: object
+      description: |
+        Who the platform decided the request is, after its own checks ran.
+        `is_admin` is always false: a token never gains administrative
+        capability, even when it is bound to an administrator.
+      properties:
+        user_id: { type: integer }
+        username: { type: string }
+        is_admin: { type: boolean, const: false }
+        is_power_user: { type: boolean, const: false }
+        is_editor: { type: boolean }
+        is_course_admin: { type: boolean }
+        course_status: { type: integer }
+        language: { type: string }
+
+    CourseSummary:
+      type: object
+      properties:
+        id: { type: integer }
+        code: { type: string }
+        title: { type: string }
+        lang: { type: string }
+        visible: { type: integer }
+        effective_scopes:
+          type: array
+          items: { type: string }
+
+    Course:
+      type: object
+      properties:
+        id: { type: integer }
+        code: { type: string }
+        title: { type: string }
+        lang: { type: string, nullable: true }
+        visible: { type: integer, nullable: true }
+        prof_names: { type: string, nullable: true }
+        counts:
+          type: object
+          properties:
+            units: { type: integer }
+            documents: { type: integer }
+            announcements: { type: integer }
+            exercises: { type: integer }
+        effective_scopes:
+          type: array
+          items: { type: string }
+        acting: { $ref: "#/components/schemas/Acting" }
+
+    Unit:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        description: { type: string, description: "HTML, cleaned by the platform." }
+        visible: { type: boolean }
+        start_date: { type: string, format: date, nullable: true }
+        end_date: { type: string, format: date, nullable: true }
+        order: { type: integer }
+        resources_count: { type: integer }
+
+    UnitWithResources:
+      allOf:
+        - $ref: "#/components/schemas/Unit"
+        - type: object
+          properties:
+            resources:
+              type: array
+              items: { $ref: "#/components/schemas/UnitResource" }
+
+    UnitCreate:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 255 }
+        description: { type: string, description: "HTML. Cleaned before it is stored." }
+        start_date: { type: string, format: date, description: "YYYY-MM-DD" }
+        end_date: { type: string, format: date, description: "YYYY-MM-DD" }
+
+    UnitUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 255 }
+        description: { type: string }
+        start_date: { type: string, format: date, nullable: true }
+        end_date: { type: string, format: date, nullable: true }
+
+    UnitResource:
+      type: object
+      properties:
+        id: { type: integer }
+        type: { type: string, enum: [document, text, divider, exercise, link] }
+        title: { type: string }
+        comments: { type: string }
+        visible: { type: boolean }
+        order: { type: integer }
+        date: { type: string }
+        ref:
+          type: object
+          description: What the resource points at, when it points at something.
+          properties:
+            document_id: { type: integer }
+            exercise_id: { type: integer }
+            link_id: { type: integer }
+
+    UnitResourceCreate:
+      type: object
+      required: [type]
+      discriminator:
+        propertyName: type
+      oneOf:
+        - title: Document already uploaded to this course
+          type: object
+          required: [type, document_id]
+          additionalProperties: false
+          properties:
+            type: { type: string, const: document }
+            document_id: { type: integer, minimum: 1 }
+            title: { type: string, maxLength: 255, description: "Defaults to the name of the file." }
+            comments: { type: string }
+        - title: A block of text
+          type: object
+          required: [type, html]
+          additionalProperties: false
+          properties:
+            type: { type: string, const: text }
+            html: { type: string, description: "HTML. Cleaned before it is stored." }
+            title: { type: string, maxLength: 255 }
+        - title: A horizontal divider
+          type: object
+          required: [type]
+          additionalProperties: false
+          properties:
+            type: { type: string, const: divider }
+            title: { type: string, maxLength: 255 }
+        - title: An exercise of this course
+          type: object
+          required: [type, exercise_id]
+          additionalProperties: false
+          properties:
+            type: { type: string, const: exercise }
+            exercise_id: { type: integer, minimum: 1 }
+            title: { type: string, maxLength: 255 }
+            comments: { type: string }
+        - title: A link of this course
+          type: object
+          required: [type, link_id]
+          additionalProperties: false
+          properties:
+            type: { type: string, const: link }
+            link_id: { type: integer, minimum: 1 }
+            title: { type: string, maxLength: 255 }
+            comments: { type: string }
+
+    UnitResourceUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 255 }
+        comments: { type: string }
+
+    Document:
+      type: object
+      properties:
+        id: { type: integer }
+        kind: { type: string, enum: [file, folder] }
+        filename: { type: string, description: "The name shown to people." }
+        title: { type: string }
+        comment: { type: string }
+        format: { type: string, description: "The extension, or \".dir\" for a folder." }
+        size_bytes: { type: integer, nullable: true }
+        visible: { type: boolean }
+        public: { type: boolean }
+        folder_id: { type: integer, nullable: true, description: "Null at the top level." }
+        external_url: { type: string, nullable: true }
+        date: { type: string }
+        date_modified: { type: string }
+
+    DocumentUploadJson:
+      type: object
+      required: [filename, content_base64]
+      additionalProperties: false
+      properties:
+        filename: { type: string, maxLength: 255 }
+        content_base64: { type: string, description: "The bytes of the file, base64 encoded." }
+        folder_id: { type: integer, minimum: 1 }
+        title: { type: string, maxLength: 255 }
+        comment: { type: string }
+
+    DocumentUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        filename: { type: string, maxLength: 255 }
+        title: { type: string, maxLength: 255 }
+        comment: { type: string }
+
+    FolderCreate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 255 }
+        parent_id: { type: integer, minimum: 1, description: "Omit to create at the top level." }
+
+    Announcement:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        content: { type: string, description: "HTML, cleaned by the platform." }
+        visible: { type: boolean }
+        date: { type: string }
+        start_display: { type: string, nullable: true }
+        stop_display: { type: string, nullable: true }
+        pinned: { type: boolean }
+
+    AnnouncementCreate:
+      type: object
+      required: [title, content]
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 255 }
+        content: { type: string, description: "HTML. Cleaned before it is stored." }
+        start_display:
+          type: string
+          description: "When it should start showing, once visible. YYYY-MM-DD HH:MM or YYYY-MM-DDTHH:MM."
+        stop_display:
+          type: string
+          description: "When it should stop showing. Same format."
+
+    AnnouncementUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 255 }
+        content: { type: string }
+        start_display: { type: string, nullable: true }
+        stop_display: { type: string, nullable: true }
+
+    VisibilityChange:
+      type: object
+      required: [visible]
+      properties:
+        visible:
+          type: boolean
+          description: True shows it to students, false hides it again.
+
+    IdList:
+      type: object
+      required: [ids]
+      additionalProperties: false
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          description: Every id of the set, exactly once, in the order wanted.
+          items: { type: integer, minimum: 1 }

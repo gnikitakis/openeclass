@@ -34,6 +34,7 @@ class ApiRouter {
      */
     const ROUTES = [
         ['GET', '/health', null, 'ApiHealthController', 'get'],
+        ['GET', '/openapi.yaml', null, 'ApiSpecController', 'get'],
         ['GET', '/capabilities', 'any', 'ApiCapabilitiesController', 'get'],
         ['GET', '/courses', 'courses.read', 'ApiCourseController', 'index'],
         ['GET', '/courses/{code}', 'courses.read', 'ApiCourseController', 'show'],
@@ -78,9 +79,7 @@ class ApiRouter {
     public static function match(ApiRequest $request) {
         $pathMatched = false;
         foreach (self::ROUTES as [$method, $pattern, $scope, $controller, $action]) {
-            // {code} is a course code; every other placeholder is a numeric id,
-            // so literal segments such as "reorder" never match an id slot
-            $regex = '#^' . preg_replace(['/\{code\}/', '/\{(\w+)\}/'], ['(?P<code>[^/]+)', '(?P<$1>\d+)'], $pattern) . '$#';
+            $regex = '#^' . self::patternRegex($pattern) . '$#';
             if (!preg_match($regex, $request->path, $m)) {
                 continue;
             }
@@ -108,6 +107,26 @@ class ApiRouter {
                 "Method {$request->method} is not allowed on {$request->path}");
         }
         throw new ApiException(ApiErrorCodes::NOT_FOUND, "No route for {$request->method} {$request->path}");
+    }
+
+    /**
+     * Translate a route pattern into a regular expression. Literal parts
+     * are quoted, so a dot in a path such as /openapi.yaml matches only a
+     * dot. {code} is a course code; every other placeholder is a numeric
+     * id, so literal segments such as "reorder" never match an id slot.
+     * @param string $pattern
+     * @return string
+     */
+    private static function patternRegex($pattern) {
+        $regex = '';
+        foreach (preg_split('/(\{\w+\})/', $pattern, -1, PREG_SPLIT_DELIM_CAPTURE) as $piece) {
+            if (preg_match('/^\{(\w+)\}$/', $piece, $m)) {
+                $regex .= $m[1] === 'code' ? '(?P<code>[^/]+)' : '(?P<' . $m[1] . '>\d+)';
+            } else {
+                $regex .= preg_quote($piece, '#');
+            }
+        }
+        return $regex;
     }
 
     /**
