@@ -52,10 +52,15 @@ class ApiCapabilitiesController {
                 'post_max_bytes' => self::iniBytes(ini_get('post_max_size')),
                 'base64_upload_max_bytes' => DOCUMENT_SERVICE_MAX_BASE64_BYTES,
                 'allowed_extensions' => self::allowedExtensions(),
+                'rate_limit_per_minute' => [
+                    'read' => ApiRateLimiter::limit('read'),
+                    'write' => ApiRateLimiter::limit('write'),
+                ],
+                'idempotency_key_ttl_seconds' => ApiIdempotency::TTL_SECONDS,
             ],
             'features' => [
                 'dry_run' => true,
-                'idempotency' => false,
+                'idempotency' => true,
                 'publish' => true,
                 'draft_first' => true,
             ],

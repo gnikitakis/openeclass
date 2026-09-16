@@ -32,6 +32,9 @@ class ApiException extends Exception {
     /** @var array<int, array{field: string, code: string}> */
     private $fieldErrors;
 
+    /** @var array<string, string> Extra response headers, e.g. Retry-After */
+    private $headers = [];
+
     /**
      * @param string $apiCode     One of the ApiErrorCodes constants
      * @param string $message     Human-readable English message, never localised
@@ -62,5 +65,24 @@ class ApiException extends Exception {
      */
     public function getFieldErrors() {
         return $this->fieldErrors;
+    }
+
+    /**
+     * Attach response headers to send with the error.
+     * @param array<string, string|int> $headers
+     * @return ApiException
+     */
+    public function withHeaders(array $headers) {
+        foreach ($headers as $name => $value) {
+            $this->headers[$name] = (string) $value;
+        }
+        return $this;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function getHeaders() {
+        return $this->headers;
     }
 }

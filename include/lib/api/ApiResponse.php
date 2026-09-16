@@ -35,6 +35,18 @@ class ApiResponse {
     /** @var bool Set once a JSON body has been emitted */
     private static $sent = false;
 
+    /** @var callable|null Called with (array $body, int $status) before a success envelope is sent */
+    private static $recorder = null;
+
+    /**
+     * Register a callback that sees every success envelope before it is
+     * sent (used to store idempotent responses).
+     * @param callable $recorder function (array $body, int $status): void
+     */
+    public static function setRecorder(callable $recorder) {
+        self::$recorder = $recorder;
+    }
+
     /**
      * Request id for correlation: the client's X-Request-Id if it is a
      * plausible identifier, otherwise a generated one.
@@ -63,7 +75,24 @@ class ApiResponse {
             'data' => $data,
             'meta' => array_merge(['request_id' => self::requestId(), 'dry_run' => false], $meta),
         ];
+        if (self::$recorder !== null) {
+            try {
+                call_user_func(self::$recorder, $body, $httpStatus);
+            } catch (Throwable $t) {
+                error_log('Integration API response recorder failed: ' . $t->getMessage());
+            }
+        }
         self::emit($body, $httpStatus);
+    }
+
+    /**
+     * Emit a previously stored JSON envelope unchanged and end the request.
+     * @param string $json       The stored body
+     * @param int    $httpStatus The stored status
+     * @param array  $headers    Extra headers, name => value
+     */
+    public static function sendRaw($json, $httpStatus, array $headers = []) {
+        self::emit($json, $httpStatus, true, $headers);
     }
 
     /**
@@ -78,7 +107,8 @@ class ApiResponse {
         if ($e->getFieldErrors()) {
             $error['field_errors'] = $e->getFieldErrors();
         }
-        self::emit(['error' => $error, 'meta' => ['request_id' => self::requestId()]], $e->getHttpStatus());
+        self::emit(['error' => $error, 'meta' => ['request_id' => self::requestId()]], $e->getHttpStatus(),
+            true, $e->getHeaders());
     }
 
     /**
@@ -137,13 +167,17 @@ class ApiResponse {
     }
 
     /**
-     * @param array $body
-     * @param int   $httpStatus
-     * @param bool  $exit Whether to end the request after emitting
+     * @param array|string $body       Envelope to encode, or an already encoded JSON string
+     * @param int          $httpStatus
+     * @param bool         $exit       Whether to end the request after emitting
+     * @param array        $headers    Extra headers, name => value
      */
-    private static function emit(array $body, $httpStatus, $exit = true) {
+    private static function emit($body, $httpStatus, $exit = true, array $headers = []) {
         self::$sent = true;
         if (!headers_sent()) {
+            foreach ($headers as $name => $value) {
+                header($name . ': ' . $value);
+            }
             // A status line set with header("HTTP/1.1 303 ...") (as
             // redirect_to_home_page() does) takes precedence over
             // http_response_code() under PHP-FPM, so the status is set the
@@ -155,7 +189,7 @@ class ApiResponse {
             header('Cache-Control: no-store');
             header('X-Request-Id: ' . self::requestId());
         }
-        echo json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), "\n";
+        echo is_string($body) ? rtrim($body) : json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), "\n";
         if ($exit) {
             exit;
         }

@@ -25,7 +25,9 @@
  * Request lifecycle:
  *  1. minimal platform bootstrap (config, database) so the token can be
  *     resolved without a session;
- *  2. route lookup and token/scope checks (ApiRouter, ApiTokenIdentity);
+ *  2. route lookup and token/scope checks (ApiRouter, ApiTokenIdentity),
+ *     then the rate limit and, for writes with an Idempotency-Key, the
+ *     replay or reservation of that key;
  *  3. ApiActingSession::prepare() validates user, course and editorship and
  *     synthesises the session;
  *  4. include/init.php runs exactly as it does for every platform page;
@@ -71,6 +73,8 @@ try {
 
     $apiIdentity = ApiTokenIdentity::fromRequest($apiRequest);
     ApiRouter::authorize($apiRoute, $apiIdentity);
+    ApiRateLimiter::check($apiRequest, $apiIdentity);
+    ApiIdempotency::begin($apiRequest, $apiIdentity);
     $apiInit = ApiActingSession::prepare($apiIdentity, $apiRoute['course']);
 } catch (ApiException $e) {
     ApiResponse::sendError($e);

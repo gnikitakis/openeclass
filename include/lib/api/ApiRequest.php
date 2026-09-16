@@ -126,6 +126,32 @@ class ApiRequest {
     }
 
     /**
+     * A digest of everything that makes this request what it is: method,
+     * path, query and body. For a multipart body, which PHP consumes
+     * before the script runs, the form fields and the uploaded bytes are
+     * hashed instead.
+     * @return string SHA-256 hex digest
+     */
+    public function fingerprint() {
+        $query = $this->query;
+        ksort($query);
+        $parts = [$this->method, $this->path, http_build_query($query)];
+        $contentType = strtolower($this->header('Content-Type') ?? '');
+        if (str_starts_with($contentType, 'multipart/form-data')) {
+            $post = $_POST;
+            ksort($post);
+            $parts[] = http_build_query($post);
+            foreach ($_FILES as $field => $file) {
+                $tmp = $file['tmp_name'] ?? '';
+                $parts[] = $field . ':' . ($file['name'] ?? '') . ':' . (is_file($tmp) ? hash_file('sha256', $tmp) : '');
+            }
+        } else {
+            $parts[] = $this->rawBody();
+        }
+        return hash('sha256', implode("\n", $parts));
+    }
+
+    /**
      * @return string
      */
     private static function resolvePath() {

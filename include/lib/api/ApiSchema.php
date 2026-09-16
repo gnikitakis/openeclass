@@ -31,10 +31,36 @@
  *  - token_prefix first characters of the token, for the admin listing
  *  - last_used    last successful authentication
  *
+ * New tables, both droppable without loss:
+ *  - api_idempotency  stored responses of writes sent with an Idempotency-Key
+ *  - api_rate_limit   request counts per token and minute
+ *
  * @param string $tbl_options Table options string used by the installer/upgrader
  */
 function api_token_schema_upgrade($tbl_options) {
     $db = Database::get();
+
+    if (!DBHelper::tableExists('api_idempotency')) {
+        $db->query("CREATE TABLE `api_idempotency` (
+            `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            `token_id` SMALLINT NOT NULL,
+            `idem_key` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `request_hash` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `status` SMALLINT NULL DEFAULT NULL,
+            `body` MEDIUMTEXT NULL,
+            `created` DATETIME NOT NULL,
+            UNIQUE KEY `api_idempotency_key` (`token_id`, `idem_key`),
+            FOREIGN KEY (`token_id`) REFERENCES `api_token` (`id`) ON DELETE CASCADE) $tbl_options");
+    }
+    if (!DBHelper::tableExists('api_rate_limit')) {
+        $db->query("CREATE TABLE `api_rate_limit` (
+            `token_id` SMALLINT NOT NULL,
+            `kind` VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            `window_start` DATETIME NOT NULL,
+            `count` INT NOT NULL DEFAULT 0,
+            PRIMARY KEY (`token_id`, `kind`, `window_start`),
+            FOREIGN KEY (`token_id`) REFERENCES `api_token` (`id`) ON DELETE CASCADE) $tbl_options");
+    }
 
     if (!DBHelper::fieldExists('api_token', 'user_id')) {
         $db->query('ALTER TABLE `api_token` ADD `user_id` INT NULL DEFAULT NULL');

@@ -2949,6 +2949,25 @@ $db->query("CREATE TABLE `api_token_course` (
     FOREIGN KEY (`token_id`) REFERENCES `api_token` (`id`) ON DELETE CASCADE)
     $tbl_options");
 
+$db->query("CREATE TABLE `api_idempotency` (
+    `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    `token_id` SMALLINT NOT NULL,
+    `idem_key` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `request_hash` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `status` SMALLINT NULL DEFAULT NULL,
+    `body` MEDIUMTEXT NULL,
+    `created` DATETIME NOT NULL,
+    UNIQUE KEY `api_idempotency_key` (`token_id`, `idem_key`),
+    FOREIGN KEY (`token_id`) REFERENCES `api_token` (`id`) ON DELETE CASCADE) $tbl_options");
+
+$db->query("CREATE TABLE `api_rate_limit` (
+    `token_id` SMALLINT NOT NULL,
+    `kind` VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `window_start` DATETIME NOT NULL,
+    `count` INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`token_id`, `kind`, `window_start`),
+    FOREIGN KEY (`token_id`) REFERENCES `api_token` (`id`) ON DELETE CASCADE) $tbl_options");
+
 $db->query("CREATE TABLE ai_providers (
     `id` smallint NOT NULL AUTO_INCREMENT,
     `name` text CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

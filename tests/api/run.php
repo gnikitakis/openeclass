@@ -400,5 +400,69 @@ if ($course !== '') {
     }
 }
 
+// 14. idempotency: a retried write creates nothing twice
+if ($course !== '') {
+    $u = "/courses/$course/units";
+    $key = 'smoke-' . bin2hex(random_bytes(6));
+    $body = ['title' => 'Idempotent unit'];
+    $r1 = call('POST', $u, $token, ["Idempotency-Key: $key"], $body);
+    $r2 = call('POST', $u, $token, ["Idempotency-Key: $key"], $body);
+    tassert($r1['status'] === 201 and $r2['status'] === 201, 'both attempts answer 201', $r1['raw'] . $r2['raw']);
+    tassert(($r1['body']['data']['id'] ?? 0) === ($r2['body']['data']['id'] ?? -1), 'the retry returns the same unit', $r2['raw']);
+    tassert(($r2['headers']['idempotent-replayed'] ?? '') === 'true', 'the retry is marked as replayed');
+    tassert(($r1['body']['meta']['request_id'] ?? '') === ($r2['body']['meta']['request_id'] ?? 'x'),
+        'the replay carries the original request id');
+    $titles = array_count_values(array_column(call('GET', $u, $token)['body']['data'] ?? [], 'title'));
+    tassert(($titles['Idempotent unit'] ?? 0) === 1, 'only one unit was created', json_encode($titles));
+    $r = call('POST', $u, $token, ["Idempotency-Key: $key"], ['title' => 'Different body']);
+    tassert($r['status'] === 409 and ($r['body']['error']['code'] ?? '') === 'idempotency_conflict',
+        'same key with a different body is 409', $r['raw']);
+    if ($publishToken !== '') {
+        $r = call('POST', $u, $publishToken, ["Idempotency-Key: $key"], $body);
+        tassert($r['status'] === 201 and ($r['body']['data']['id'] ?? 0) !== ($r1['body']['data']['id'] ?? 0),
+            'keys are private to a token', $r['raw']);
+    }
+    $key2 = 'smoke-' . bin2hex(random_bytes(6));
+    $r = call('POST', $u, $token, ["Idempotency-Key: $key2", 'X-Dry-Run: true'], ['title' => 'Dry then real']);
+    tassert($r['status'] === 200 and ($r['body']['meta']['dry_run'] ?? false) === true, 'dry run with a key answers normally', $r['raw']);
+    $r = call('POST', $u, $token, ["Idempotency-Key: $key2"], ['title' => 'Dry then real']);
+    tassert($r['status'] === 201 and empty($r['headers']['idempotent-replayed']), 'a dry run does not consume the key', $r['raw']);
+    $key3 = 'smoke-' . bin2hex(random_bytes(6));
+    $r = call('POST', $u, $token, ["Idempotency-Key: $key3"], []);
+    tassert($r['status'] === 422, 'a failed write with a key is still 422', $r['raw']);
+    $r = call('POST', $u, $token, ["Idempotency-Key: $key3"], ['title' => 'Fixed after failure']);
+    tassert($r['status'] === 201 and empty($r['headers']['idempotent-replayed']), 'a failed write leaves the key free', $r['raw']);
+    $r = call('POST', $u, $token, ['Idempotency-Key: has spaces and *'], $body);
+    tassert($r['status'] === 400, 'an unusable key is 400', $r['raw']);
+    $r = call('GET', $u, $token, ["Idempotency-Key: $key"]);
+    tassert($r['status'] === 200 and empty($r['headers']['idempotent-replayed']), 'a key on a read is ignored');
+}
+
+// 15. rate limit: last, because it spends the write budget of this minute
+$r = call('GET', '/capabilities', $token);
+$readLimit = intval($r['headers']['x-ratelimit-limit'] ?? 0);
+$remaining1 = intval($r['headers']['x-ratelimit-remaining'] ?? -1);
+tassert($readLimit > 0 and $remaining1 >= 0, 'read responses carry rate limit headers', json_encode($r['headers']));
+tassert(($r['body']['data']['limits']['rate_limit_per_minute']['read'] ?? 0) === $readLimit, 'capabilities reports the read limit');
+$r = call('GET', '/capabilities', $token);
+$remaining2 = intval($r['headers']['x-ratelimit-remaining'] ?? -1);
+tassert($remaining2 === $remaining1 - 1 or $remaining2 === $readLimit - 1, 'each read spends one unit of the budget', "$remaining1 -> $remaining2");
+if ($course !== '') {
+    $a = "/courses/$course/announcements";
+    $r = call('POST', $a, $token, [], ['title' => 'Rate probe', 'content' => '<p>x</p>']);
+    $writeLimit = intval($r['headers']['x-ratelimit-limit'] ?? 0);
+    tassert($writeLimit > 0 and $writeLimit < $readLimit, 'writes have their own, smaller budget', json_encode($r['headers']));
+    $last = $r;
+    for ($i = 0; $i < $writeLimit + 2 and $last['status'] !== 429; $i++) {
+        $last = call('POST', $a, $token, [], ['title' => 'Rate probe', 'content' => '<p>x</p>']);
+    }
+    tassert($last['status'] === 429 and ($last['body']['error']['code'] ?? '') === 'rate_limited',
+        'the write budget is enforced with 429 rate_limited', $last['raw']);
+    $retry = intval($last['headers']['retry-after'] ?? 0);
+    tassert($retry >= 1 and $retry <= 60, 'Retry-After points at the next window', $retry);
+    $r = call('GET', $a, $token);
+    tassert($r['status'] === 200, 'reads still work while writes are limited', $r['raw']);
+}
+
 echo "\n" . ($failures ? "$failures assertion(s) FAILED" : 'All assertions passed') . "\n";
 exit($failures ? 1 : 0);

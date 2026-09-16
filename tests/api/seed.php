@@ -83,6 +83,11 @@ echo "done\n";
 set_config('ext_apitoken_enabled', 1);
 echo "API enabled (ext_apitoken_enabled = 1)\n";
 
+// A previous run may have spent this minute's request budget or left
+// idempotency keys behind
+$db->query('DELETE FROM api_rate_limit');
+$db->query('DELETE FROM api_idempotency');
+
 $department = $db->querySingle('SELECT id FROM hierarchy ORDER BY id LIMIT 1');
 if (!$department) {
     die("No department in hierarchy table.\n");
