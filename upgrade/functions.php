@@ -4243,6 +4243,10 @@ function upgrade_to_4_5($tbl_options) : void
     } elseif (!DBHelper::fieldExists('cadmos_course', 'created')) {
         Database::get()->query("ALTER TABLE `cadmos_course` ADD `created` datetime DEFAULT CURRENT_TIMESTAMP AFTER `source`");
     }
+
+    // Integration API: bind api_token rows to a user, scopes and a token hash
+    require_once 'include/lib/api/ApiSchema.php';
+    api_token_schema_upgrade($tbl_options);
 }
 
 /**

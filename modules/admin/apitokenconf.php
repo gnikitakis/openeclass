@@ -25,6 +25,57 @@ $helpSubTopic = 'api_token';
 require_once '../../include/baseTheme.php';
 require_once 'modules/admin/extconfig/externals.php';
 require_once 'modules/admin/extconfig/apitokenapp.php';
+require_once 'include/lib/api/ApiScopes.php';
+
+// Columns added by the Integration API (include/lib/api/ApiSchema.php). The
+// page works without them and then shows the classic form only.
+$api_user_binding = (DBHelper::fieldExists('api_token', 'user_id') and DBHelper::fieldExists('api_token', 'scopes'));
+
+/**
+ * Form fields of the Integration API binding: the user the token acts as
+ * and the scopes it carries.
+ * @param bool        $enabled Whether the api_token columns exist
+ * @param int|null    $userId  Bound user, when editing
+ * @param string|null $scopes  Space-separated stored scopes, when editing
+ * @return string HTML, empty when $enabled is false
+ */
+function api_token_binding_fields($enabled, $userId, $scopes) {
+    global $langAPITokenUser, $langAPITokenUserHelp, $langAPITokenScopes, $langAPITokenScopesHelp;
+    if (!$enabled) {
+        return '';
+    }
+    $username = '';
+    if ($userId) {
+        $user = Database::get()->querySingle('SELECT username FROM user WHERE id = ?d', $userId);
+        $username = $user? $user->username: '';
+    }
+    $granted = preg_split('/\s+/', trim((string) $scopes), -1, PREG_SPLIT_NO_EMPTY);
+    $boxes = '';
+    foreach (ApiScopes::AREAS as $area => $levels) {
+        $boxes .= "<div class='d-flex flex-wrap align-items-center mt-1'><span class='me-3' style='min-width: 9em'>" . q($area) . "</span>";
+        foreach ($levels as $level) {
+            $scope = "$area.$level";
+            $checked = in_array($scope, $granted, true)? 'checked': '';
+            $boxes .= "<label class='label-container me-4' aria-label='" . q($scope) . "'>
+                                <input type='checkbox' name='api_scopes[]' value='" . q($scope) . "' $checked><span class='checkmark'></span>$level</label>";
+        }
+        $boxes .= "</div>";
+    }
+    return "
+                    <div class='form-group mt-4'>
+                        <label for='api_user' class='col-12 control-label-notes'>$langAPITokenUser</label>
+                        <div class='col-12'>
+                            <input id='api_user' class='form-control' type='text' name='api_user' value='" . q($username) . "' autocomplete='off'>
+                            <div class='form-text'>$langAPITokenUserHelp</div>
+                        </div>
+                    </div>
+                    <div class='form-group mt-4'>
+                        <div class='col-12 control-label-notes'>$langAPITokenScopes</div>
+                        <div class='col-12'>$boxes
+                            <div class='form-text'>$langAPITokenScopesHelp</div>
+                        </div>
+                    </div>";
+}
 
 load_js('bootstrap-datetimepicker');
 load_js('tools.js');
@@ -90,6 +141,22 @@ if (isset($_POST['submit'])) {
     }
 
     $all_courses = (($_POST['api_all_courses'] ?? '') == 'true')? 1: 0;
+
+    // Integration API binding: the user the token acts as, and its scopes
+    $api_user_id = null;
+    $api_scopes = '';
+    if ($api_user_binding) {
+        $api_username = trim($_POST['api_user'] ?? '');
+        if ($api_username !== '') {
+            $api_user = Database::get()->querySingle('SELECT id FROM user WHERE username = ?s', $api_username);
+            if (!$api_user) {
+                Session::Messages($langAPITokenUserNotFound, 'alert-danger');
+                redirect_to_home_page($app->getConfigUrl() . (isset($_GET['edit'])? '?edit=' . intval($_GET['edit']): '?add'));
+            }
+            $api_user_id = $api_user->id;
+        }
+        $api_scopes = implode(' ', array_intersect(ApiScopes::known(), (array) ($_POST['api_scopes'] ?? [])));
+    }
     $token = null;
     if (isset($_GET['edit'])) {
         if ($_POST['submit'] == 'create_token') { // generate api token
@@ -98,6 +165,10 @@ if (isset($_POST['submit'])) {
                 SET token = ?s, updated = " . DBHelper::timeAfter() . ", expired = ?s
                 WHERE id = ?d",
                 $token, $token_expires_at, $_GET['edit']);
+            if ($api_user_binding) {
+                Database::get()->query('UPDATE api_token SET token_hash = ?s, token_prefix = ?s WHERE id = ?d',
+                    hash('sha256', $token), substr($token, 0, 16), $_GET['edit']);
+            }
         }
         $result_update = Database::get()->query("UPDATE api_token SET
                             name = ?s,
@@ -109,6 +180,10 @@ if (isset($_POST['submit'])) {
                             all_courses = ?d
                         WHERE id = ?d", $_POST['name'], $_POST['comments'], $api_category, $_POST['remote_url'], $enabled, $token_expires_at, $all_courses, $_GET['edit']);
         $token_id = $_GET['edit'];
+        if ($api_user_binding) {
+            Database::get()->query('UPDATE api_token SET user_id = ?d, scopes = ?s WHERE id = ?d',
+                $api_user_id, $api_scopes, $token_id);
+        }
     } else {
         $token = "eclass_".bin2hex(random_bytes(32));
         $result_insert = Database::get()->query("INSERT INTO api_token SET
@@ -122,6 +197,10 @@ if (isset($_POST['submit'])) {
                                 expired = ?s",
             $token, $_POST['name'], $_POST['comments'], $api_category, $_POST['remote_url'], $token_expires_at);
         $token_id = $result_insert->lastInsertID;
+        if ($api_user_binding) {
+            Database::get()->query('UPDATE api_token SET token_hash = ?s, token_prefix = ?s, user_id = ?d, scopes = ?s
+                WHERE id = ?d', hash('sha256', $token), substr($token, 0, 16), $api_user_id, $api_scopes, $token_id);
+        }
     }
     Database::get()->query('DELETE FROM api_token_course WHERE token_id = ?d', $token_id);
     if (!$all_courses) {
@@ -143,7 +222,16 @@ if (isset($_POST['submit'])) {
     redirect_to_home_page($app->getConfigUrl());
 }
 
-$q = Database::get()->queryArray("SELECT id, token, name, comments, ip, expired, enabled FROM api_token");
+if ($api_user_binding) {
+    $q = Database::get()->queryArray("SELECT api_token.id, api_token.token, api_token.name, api_token.comments,
+            api_token.ip, api_token.expired, api_token.enabled, api_token.token_prefix, api_token.scopes, user.username
+        FROM api_token LEFT JOIN user ON user.id = api_token.user_id");
+    $binding_head = "<th>$langAPITokenUser</th>
+                        <th>$langAPITokenScopes</th>";
+} else {
+    $q = Database::get()->queryArray("SELECT id, token, name, comments, ip, expired, enabled FROM api_token");
+    $binding_head = '';
+}
 
 if (count($q) > 0) {
     $tool_content .= "<div class='table-responsive mt-4 mb-4'>";
@@ -152,6 +240,7 @@ if (count($q) > 0) {
                     <tr class='list-header'>
                         <th>$langExtAppName</th>
                         <th>Remote IP</th>
+                        $binding_head
                         <th class='text-end' aria-label='$langSettingSelect'>" . icon('fa-gears') . "</th>
                     </tr>
                 </thead>";
@@ -173,6 +262,13 @@ if (count($q) > 0) {
         $tool_content .= "<tr class='$class'>";
         $tool_content .= "<td><a href='$_SERVER[SCRIPT_NAME]?edit=$data->id'>$data->name</a> $icon $expired_message<div class='help-block'>$data->comments</div></td>";
         $tool_content .= "<td>$data->ip</td>";
+        if ($api_user_binding) {
+            $tool_content .= "<td>" . ($data->username? q($data->username): "<span class='text-muted'>$langAPITokenClassic</span>") .
+                "<div class='help-block'><code>" . q($data->token_prefix ?? '') . "</code></div></td>";
+            $tool_content .= "<td>" . implode(' ', array_map(function ($scope) {
+                return "<code>" . q($scope) . "</code>";
+            }, preg_split('/\s+/', trim((string) $data->scopes), -1, PREG_SPLIT_NO_EMPTY))) . "</td>";
+        }
         $tool_content .= "<td class='option-btn-cell text-end'>" .
             action_button(array(
                 array('title' => $langEditChange,
@@ -247,7 +343,7 @@ if (isset($_GET['edit'])) {
                             <input id='$langIpAddress' class='form-control' type='text' name='remote_url' value='" . q($data->ip) . "'>
                             <div class='form-text'>$langAPITokenIP</div>
                         </div>
-                    </div>
+                    </div>" . api_token_binding_fields($api_user_binding, $data->user_id ?? null, $data->scopes ?? '') . "
                     <div class='form-group mt-4'>
                         <label for='$langComments' class='col-12 control-label-notes'>$langComments</label>
                         <div class='col-12'>
@@ -348,7 +444,7 @@ if (isset($_GET['edit'])) {
                                 <input id='$langIpAddress' class='form-control' type='text' name='remote_url'>
                                 <div class='form-text'>$langAPITokenIP</div>
                             </div>
-                        </div>
+                        </div>" . api_token_binding_fields($api_user_binding, null, '') . "
                         <div id='category-select-field' class='form-group mt-4'>
                             <label for='select-category' class='col-12 control-label-notes'>$langCategory</label>
                             <div class='col-sm-12'>

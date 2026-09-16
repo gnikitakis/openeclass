@@ -163,8 +163,15 @@ class Access {
         $access->token = $token;
 
         $ip = Log::get_client_ip();
-        $result = Database::get()->querySingle('SELECT *, expired < NOW() AS token_expired
-            FROM api_token WHERE token = ?s', $token);
+        // Once the Integration API schema is in place, tokens are found by
+        // their SHA-256 hash; the plain column is only consulted before that
+        if (DBHelper::fieldExists('api_token', 'token_hash')) {
+            $result = Database::get()->querySingle('SELECT *, expired < NOW() AS token_expired
+                FROM api_token WHERE token_hash = ?s', hash('sha256', $token));
+        } else {
+            $result = Database::get()->querySingle('SELECT *, expired < NOW() AS token_expired
+                FROM api_token WHERE token = ?s', $token);
+        }
         if ($result
                 and $result->enabled
                 and !$result->token_expired

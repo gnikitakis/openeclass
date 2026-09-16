@@ -6892,6 +6892,12 @@ $langCreateAPIToken = 'Δημιουργία νέου Token';
 $langAPITokenCreated = "Το token δημιουργήθηκε. Αντιγράψτε το έτσι ώστε να το χρησιμοποιήσετε στην εφαρμογή σας.";
 $langAPITokenAccess = 'Πρόσβαση μέσω του API';
 $langAPITokenIP = 'Εισαγάγετε μία ή περισσότερες διευθύνσεις IP ή υποδίκτυα σε μορφή CIDR χωρισμένα με κενά.';
+$langAPITokenUser = 'Ενεργεί ως χρήστης';
+$langAPITokenUserHelp = 'Όνομα χρήστη ενός υπάρχοντος χρήστη. Οι κλήσεις με αυτό το token ενεργούν με τα δικαιώματα του χρήστη, στα μαθήματα που διδάσκει. Αφήστε το κενό για token μόνο του κλασικού API.';
+$langAPITokenUserNotFound = 'Δεν υπάρχει χρήστης με αυτό το όνομα χρήστη.';
+$langAPITokenScopes = 'Δικαιώματα (Integration API)';
+$langAPITokenScopesHelp = 'Τι επιτρέπεται να κάνει το token. Ό,τι δημιουργεί το token παραμένει κρυφό από τους εκπαιδευόμενους. Για να γίνει ορατό περιεχόμενο χρειάζεται δικαίωμα "publish".';
+$langAPITokenClassic = 'κλασικό API';
 
 $langExtAppAll = "Όλα";
 $langExtAppGeneral = "Γενικά εργαλεία";

@@ -2930,7 +2930,14 @@ $db->query("CREATE TABLE api_token (
     `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `expired` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `user_id` INT NULL DEFAULT NULL,
+    `scopes` TEXT NULL DEFAULT NULL,
+    `token_hash` CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL,
+    `token_prefix` VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL,
+    `last_used` DATETIME NULL DEFAULT NULL,
     CONSTRAINT FOREIGN KEY (`department_id`) REFERENCES `hierarchy` (`id`),
+    CONSTRAINT `api_token_user_fk` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE,
+    UNIQUE KEY `api_token_hash` (`token_hash`),
     PRIMARY KEY (`id`)) $tbl_options");
 
 $db->query("CREATE TABLE `api_token_course` (
